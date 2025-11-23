@@ -1,12 +1,12 @@
 import React, { useRef, useEffect, useState } from 'react';
 import { ChatMessage, AppState } from '../types';
-import { Send, Upload, Sparkles, MessageSquare } from 'lucide-react';
+import { Send, Upload, Sparkles, MessageSquare, Mic, MicOff } from 'lucide-react';
 
 interface ChatPanelProps {
   appState: AppState;
   messages: ChatMessage[];
   onSendMessage: (text: string) => void;
-  onFileUpload: (file: File) => void;
+  onFileUpload: (files: FileList) => void;
   isProcessing: boolean;
 }
 
@@ -18,8 +18,10 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   isProcessing 
 }) => {
   const [input, setInput] = useState('');
+  const [isListening, setIsListening] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const recognitionRef = useRef<any>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -28,6 +30,41 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  // Initialize Speech Recognition
+  useEffect(() => {
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+      recognitionRef.current = new SpeechRecognition();
+      recognitionRef.current.continuous = false;
+      recognitionRef.current.interimResults = false;
+      recognitionRef.current.lang = 'en-US';
+
+      recognitionRef.current.onresult = (event: any) => {
+        const transcript = event.results[0][0].transcript;
+        setInput(prev => (prev ? `${prev} ${transcript}` : transcript));
+        setIsListening(false);
+      };
+
+      recognitionRef.current.onerror = (event: any) => {
+        console.error('Speech recognition error', event.error);
+        setIsListening(false);
+      };
+
+      recognitionRef.current.onend = () => {
+        setIsListening(false);
+      };
+    }
+  }, []);
+
+  const toggleListening = () => {
+    if (isListening) {
+      recognitionRef.current?.stop();
+    } else {
+      recognitionRef.current?.start();
+      setIsListening(true);
+    }
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -38,8 +75,8 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      onFileUpload(e.target.files[0]);
+    if (e.target.files && e.target.files.length > 0) {
+      onFileUpload(e.target.files);
     }
   };
 
@@ -72,14 +109,14 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
             </div>
             <div className="text-center max-w-sm">
               <h3 className="text-xl font-bold text-slate-700 mb-2">Upload a Receipt</h3>
-              <p className="text-slate-500">Take a photo or upload an image of your bill to start splitting costs automatically.</p>
+              <p className="text-slate-500">Take a photo of your bill (or multiple pages) to start splitting costs automatically.</p>
             </div>
             <button
               onClick={() => fileInputRef.current?.click()}
               className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-full shadow-lg transition-all transform hover:scale-105 flex items-center gap-2"
             >
               <Upload size={18} />
-              Choose Image
+              Choose Images
             </button>
           </div>
         )}
@@ -119,25 +156,39 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
 
       {/* Input Area */}
       <div className="p-4 bg-white border-t border-slate-200">
-        <form onSubmit={handleSubmit} className="relative">
-          <input
-            type="text"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            disabled={appState === AppState.UPLOAD || isProcessing}
-            placeholder={
-              appState === AppState.UPLOAD 
-                ? "Upload a receipt first..." 
-                : "Type e.g., 'Tom had the steak' or 'Share pizza'"
-            }
-            className="w-full pl-4 pr-12 py-3 bg-slate-100 border-none rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all text-slate-800 placeholder-slate-400 disabled:opacity-60 disabled:cursor-not-allowed"
-          />
+        <form onSubmit={handleSubmit} className="relative flex items-center gap-2">
+          <div className="relative flex-1">
+            <input
+              type="text"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              disabled={appState === AppState.UPLOAD || isProcessing}
+              placeholder={
+                appState === AppState.UPLOAD 
+                  ? "Upload a receipt first..." 
+                  : isListening ? "Listening..." : "Type or speak commands..."
+              }
+              className={`w-full pl-4 pr-12 py-3 bg-slate-100 border-none rounded-xl focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all text-slate-800 placeholder-slate-400 disabled:opacity-60 disabled:cursor-not-allowed ${isListening ? 'ring-2 ring-red-400 bg-red-50' : ''}`}
+            />
+            {appState !== AppState.UPLOAD && (
+              <button
+                type="button"
+                onClick={toggleListening}
+                disabled={isProcessing}
+                className={`absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg transition-colors ${isListening ? 'text-red-500 hover:bg-red-100 animate-pulse' : 'text-slate-400 hover:text-indigo-600 hover:bg-slate-200'}`}
+                title="Voice Command"
+              >
+                {isListening ? <MicOff size={18} /> : <Mic size={18} />}
+              </button>
+            )}
+          </div>
+          
           <button
             type="submit"
             disabled={!input.trim() || isProcessing || appState === AppState.UPLOAD}
-            className="absolute right-2 top-1/2 -translate-y-1/2 p-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:hover:bg-indigo-600 transition-colors"
+            className="p-3 bg-indigo-600 text-white rounded-xl hover:bg-indigo-700 disabled:opacity-50 disabled:hover:bg-indigo-600 transition-colors shadow-sm"
           >
-            <Send size={18} />
+            <Send size={20} />
           </button>
         </form>
         <input
@@ -145,6 +196,7 @@ export const ChatPanel: React.FC<ChatPanelProps> = ({
           ref={fileInputRef}
           onChange={handleFileChange}
           accept="image/*"
+          multiple
           className="hidden"
         />
       </div>

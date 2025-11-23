@@ -35,3 +35,8 @@ export enum AppState {
   PROCESSING_RECEIPT = 'PROCESSING_RECEIPT',
   SPLITTING = 'SPLITTING',
 }
+
+export interface ImageFile {
+  base64: string;
+  mimeType: string;
+}

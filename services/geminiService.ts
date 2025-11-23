@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { ReceiptData, ReceiptItem } from "../types";
+import { ReceiptData, ReceiptItem, ImageFile } from "../types";
 
 // Initialize Gemini Client
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -8,27 +8,31 @@ const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 const MODEL_NAME = 'gemini-3-pro-preview';
 
 /**
- * Parses a receipt image to extract items, prices, and totals.
+ * Parses receipt image(s) to extract items, prices, and totals.
  */
-export const parseReceiptImage = async (base64Image: string, mimeType: string): Promise<ReceiptData> => {
+export const parseReceiptImage = async (images: ImageFile[]): Promise<ReceiptData> => {
   try {
+    const imageParts = images.map(img => ({
+      inlineData: {
+        data: img.base64,
+        mimeType: img.mimeType,
+      },
+    }));
+
     const response = await ai.models.generateContent({
       model: MODEL_NAME,
       contents: {
         parts: [
+          ...imageParts,
           {
-            inlineData: {
-              data: base64Image,
-              mimeType: mimeType,
-            },
-          },
-          {
-            text: `Analyze this receipt image. Extract all line items with their prices. Also extract the tax, tip (if explicitly listed), and total.
+            text: `Analyze these receipt images. If there are multiple images, treat them as a single receipt spanning multiple pages.
+            Extract all line items with their prices. Also extract the tax, tip (if explicitly listed), and total.
             If tip is not listed, set it to 0. 
             Return a valid JSON object matching the schema.
             Ensure 'price' is a number. 
             Assign a unique string ID to each item (e.g., 'item-1', 'item-2').
-            Initialize 'assignees' as an empty array for all items.`,
+            Initialize 'assignees' as an empty array for all items.
+            Detect the currency symbol or code (e.g., "$", "€", "GBP") and return it in the 'currency' field. Default to "$" if unknown.`,
           },
         ],
       },
@@ -147,5 +151,37 @@ export const updateAssignments = async (
   } catch (error) {
     console.error("Error processing split command:", error);
     throw error;
+  }
+};
+
+/**
+ * Gets the current exchange rate between two currencies using Gemini with Google Search.
+ */
+export const getExchangeRate = async (fromCurrency: string, toCurrency: string): Promise<number> => {
+  if (fromCurrency === toCurrency) return 1;
+
+  const prompt = `What is the current exchange rate to convert 1 ${fromCurrency} to ${toCurrency}? Return ONLY the numeric exchange rate.`;
+  
+  try {
+    const response = await ai.models.generateContent({
+      model: MODEL_NAME,
+      contents: prompt,
+      config: {
+        tools: [{ googleSearch: {} }],
+      },
+    });
+
+    const text = response.text;
+    if (!text) throw new Error("Could not retrieve exchange rate");
+
+    // Extract the first number from the response
+    const match = text.match(/[\d.]+/);
+    if (match) {
+      return parseFloat(match[0]);
+    }
+    return 1;
+  } catch (error) {
+    console.error("Error fetching exchange rate:", error);
+    return 1; // Fallback
   }
 };

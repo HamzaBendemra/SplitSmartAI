@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { ReceiptPanel } from './components/ReceiptPanel';
 import { ChatPanel } from './components/ChatPanel';
-import { ReceiptData, ChatMessage, AppState, PersonSummary } from './types';
-import { parseReceiptImage, updateAssignments } from './services/geminiService';
+import { ReceiptData, ChatMessage, AppState, PersonSummary, ImageFile } from './types';
+import { parseReceiptImage, updateAssignments, getExchangeRate } from './services/geminiService';
 import { calculateSplits } from './utils/calculations';
 
 function App() {
@@ -11,59 +11,96 @@ function App() {
   const [summaries, setSummaries] = useState<PersonSummary[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  
+  // Currency handling
+  const [displayCurrency, setDisplayCurrency] = useState<string>('USD');
+  const [exchangeRate, setExchangeRate] = useState<number>(1);
 
   // Recalculate splits whenever receipt data changes
   useEffect(() => {
     if (receiptData) {
       const newSummaries = calculateSplits(receiptData);
       setSummaries(newSummaries);
+      // Initialize display currency to receipt currency if not set
+      if (appState === AppState.PROCESSING_RECEIPT) {
+        setDisplayCurrency(receiptData.currency);
+      }
     }
-  }, [receiptData]);
+  }, [receiptData, appState]);
 
-  const handleFileUpload = async (file: File) => {
+  const handleCurrencyChange = async (newCurrency: string) => {
+    setDisplayCurrency(newCurrency);
+    if (receiptData) {
+      if (newCurrency === receiptData.currency) {
+        setExchangeRate(1);
+      } else {
+        // Fetch rate
+        setIsProcessing(true); // Small loading indicator logic could be better, but this blocks UI nicely
+        try {
+          const rate = await getExchangeRate(receiptData.currency, newCurrency);
+          setExchangeRate(rate);
+        } catch (e) {
+          console.error("Failed to fetch rate", e);
+        } finally {
+          setIsProcessing(false);
+        }
+      }
+    }
+  };
+
+  const handleFileUpload = async (files: FileList) => {
     setAppState(AppState.PROCESSING_RECEIPT);
     setIsProcessing(true);
     
-    // Add temporary message
     setMessages([{
       id: Date.now().toString(),
       role: 'model',
-      text: 'Scanning your receipt... this will just take a moment.',
+      text: `Scanning ${files.length} image${files.length > 1 ? 's' : ''}... this will just take a moment.`,
       timestamp: Date.now()
     }]);
 
     try {
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        const base64String = reader.result as string;
-        // Remove data URL prefix
-        const base64Data = base64String.split(',')[1];
-        const mimeType = file.type;
+      const promises = Array.from(files).map(file => {
+        return new Promise<ImageFile>((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => {
+            const base64String = reader.result as string;
+            resolve({
+              base64: base64String.split(',')[1],
+              mimeType: file.type
+            });
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+      });
 
-        try {
-          const data = await parseReceiptImage(base64Data, mimeType);
-          setReceiptData(data);
-          setAppState(AppState.SPLITTING);
-          setMessages(prev => [...prev, {
-            id: Date.now().toString(),
-            role: 'model',
-            text: 'I\'ve analyzed the receipt! You can now tell me who ordered what. For example: "Alice had the burger" or "Bob and Charlie shared the nachos".',
-            timestamp: Date.now()
-          }]);
-        } catch (error) {
-          console.error(error);
-          setAppState(AppState.UPLOAD);
-          setMessages(prev => [...prev, {
-            id: Date.now().toString(),
-            role: 'model',
-            text: 'Sorry, I couldn\'t parse that image. Please try uploading a clearer photo.',
-            timestamp: Date.now()
-          }]);
-        } finally {
-          setIsProcessing(false);
-        }
-      };
-      reader.readAsDataURL(file);
+      const images = await Promise.all(promises);
+
+      try {
+        const data = await parseReceiptImage(images);
+        setReceiptData(data);
+        setDisplayCurrency(data.currency || 'USD');
+        setExchangeRate(1); // Reset on new upload
+        setAppState(AppState.SPLITTING);
+        setMessages(prev => [...prev, {
+          id: Date.now().toString(),
+          role: 'model',
+          text: 'I\'ve analyzed the receipt! You can drag items to names, type commands like "Alice had the burger", or use the microphone.',
+          timestamp: Date.now()
+        }]);
+      } catch (error) {
+        console.error(error);
+        setAppState(AppState.UPLOAD);
+        setMessages(prev => [...prev, {
+          id: Date.now().toString(),
+          role: 'model',
+          text: 'Sorry, I couldn\'t parse that image. Please try uploading a clearer photo.',
+          timestamp: Date.now()
+        }]);
+      } finally {
+        setIsProcessing(false);
+      }
     } catch (error) {
       console.error("File reading error", error);
       setIsProcessing(false);
@@ -112,19 +149,28 @@ function App() {
     }
   };
 
+  const handleDropItem = (personName: string, itemName: string) => {
+    const command = `Assign ${itemName} to ${personName}`;
+    handleSendMessage(command);
+  };
+
   return (
     <div className="flex flex-col md:flex-row h-screen w-full bg-slate-100 overflow-hidden">
       {/* Left Pane: Receipt & Summary */}
-      <div className="w-full md:w-1/2 h-1/2 md:h-full relative z-10 shadow-xl md:shadow-none">
+      <div className="w-full md:w-1/2 h-1/2 md:h-full relative z-10 shadow-xl md:shadow-none order-2 md:order-1">
         <ReceiptPanel 
           data={receiptData} 
           summaries={summaries} 
           isLoading={appState === AppState.PROCESSING_RECEIPT}
+          onDropItem={handleDropItem}
+          onCurrencyChange={handleCurrencyChange}
+          displayCurrency={displayCurrency}
+          exchangeRate={exchangeRate}
         />
       </div>
 
       {/* Right Pane: Chat */}
-      <div className="w-full md:w-1/2 h-1/2 md:h-full">
+      <div className="w-full md:w-1/2 h-1/2 md:h-full order-1 md:order-2">
         <ChatPanel 
           appState={appState}
           messages={messages}
