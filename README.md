@@ -2,8 +2,6 @@
 
 SplitSmart AI is an intelligent bill-splitting application that transforms the tedious task of dividing expenses into a simple conversation. Powered by Google's **Gemini 3 Pro** model, it allows users to upload receipt images and assign costs using natural language.
 
-![SplitSmart AI Conceptual](https://images.unsplash.com/photo-1554224155-8d04cb21cd6c?auto=format&fit=crop&q=80&w=2000&ixlib=rb-4.0.3)
-
 ## 🚀 Features
 
 - **AI Receipt Parsing**: Instantly extracts items, prices, tax, and tip from receipt photos using computer vision and LLMs (`gemini-3-pro-preview`).
